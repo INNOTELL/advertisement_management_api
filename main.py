@@ -13,7 +13,6 @@ class NewAdvert(BaseModel):
     Description: str
     Price: float
     Category: str
-
 # creates a list to store posted ads
 advert = []
 
