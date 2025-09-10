@@ -6,12 +6,28 @@ from typing import Annotated
 from utils import replace_mongo_id
 import cloudinary
 import cloudinary.uploader
+from dotenv import load_dotenv
+import os
 
+
+load_dotenv()
+
+tags_metadata = [
+    {
+        "name": "Home",
+        "description": "welcome to our our Advertisement Management API"
+    },
+    {
+        "name": "Advert",
+        "description": "ads"
+    }
+
+]
 
 cloudinary.config(
-    cloud_name = "dyhqmkyfc",
-    api_key = "617624249245792",
-    api_secret = "cAhgM5MehvpHZu6wgW23h63n9WM"
+    cloud_name = os.getenv("CLOUD_NAME"),
+    api_key = os.getenv("API_KEY"),
+    api_secret = os.getenv("API_SECRET")
 )
 
 
@@ -26,12 +42,12 @@ class NewAdvert(BaseModel):
 # advert = []
 
 # creates an endpoint to the homepage
-@app.get("/")
+@app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
 # allows vendors to create a new advert.
-@app.post("/advert")
+@app.post("/advert", tags=["Adverts"])
 def new_advert(
     Title: Annotated[str, Form()], 
     Description: Annotated[str, Form()], 
@@ -55,8 +71,6 @@ def all_adverts(Title= "", description="", limit = 10, skip = 0):
     advert = advert_collection.find(limit = int(limit), skip = int(skip)).to_list()
     return {"data": list(map(replace_mongo_id, advert))}
 
-# def all_adverts():
-#     return{"all_adverts":{advert_collection}}
 
 # allows vendors to view a specific advert’s details
 @app.get("/advert_details/{Title}")
@@ -66,10 +80,6 @@ def advert_details(Title:str):
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
     return {"data": [replace_mongo_id(adverts)]}
 
-    # for adverts in advert_collection:
-    #     if adverts["Title"] == Title:
-    #         return ads
-    #     raise HTTPException(status_code=404, detail="Advert not found")
     
 # allows vendors to edit an advert
 @app.put("/edit_advert/{title}")
