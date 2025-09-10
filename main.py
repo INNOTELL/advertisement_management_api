@@ -61,16 +61,18 @@ def new_advert(
     Title: Annotated[str, Form()], 
     Description: Annotated[str, Form()], 
     Price: Annotated[float, Form()],
-    flyer:Annotated[UploadFile, File()]):
+    Category: Annotated[str, Form()],
+    Image:Annotated[UploadFile, File()]):
 
     # upload flyer to cloudinary to get a url
-    upload_advert = cloudinary.uploader.upload(flyer.file)
+    upload_advert = cloudinary.uploader.upload(Image.file)
 
     advert_collection.insert_one({
         "title": Title,
         "Description": Description,
         "price": Price,
-        "flyer": upload_advert["secure_url"]
+        "category": Category,
+        "Image": upload_advert["secure_url"]
     })
     return{"message": "Sucessful"}
 
@@ -96,6 +98,7 @@ def advert_edit(
     Title: Annotated[str, Form()], 
     Description: Annotated[str, Form()], 
     Price: Annotated[float, Form()],
+    Category: Annotated[str, Form()],
     flyer:Annotated[UploadFile, File()]):
     adverts = advert_collection.find_one({"title":Title})
     if not adverts:
@@ -105,6 +108,7 @@ def advert_edit(
         "Title": Title,
         "Description": Description,
         "price": Price,
+        "category": Category,
         "Flyer": uploald_advert["secure_url"]
     })
     return{"message": "You have successfully updated your Ad✅"}
