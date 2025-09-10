@@ -30,6 +30,16 @@ cloudinary.config(
     api_secret = os.getenv("API_SECRET")
 )
 
+tags_metadata = [
+    {
+        "name": "Home",
+        "description": "welcome to our our Advertisement Management API"
+    },
+    {
+        "name": "Advert",
+        "description": "ads"
+    }]
+
 
 app = FastAPI()
 
@@ -41,12 +51,12 @@ class NewAdvert(BaseModel):
 # creates a list to store posted ads
 
 # creates an endpoint to the homepage
-@app.get("/")
+@app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
 # allows vendors to create a new advert.
-@app.post("/advert")
+@app.post("/advert", tags=["Advert"])
 def new_advert(
     Title: Annotated[str, Form()], 
     Description: Annotated[str, Form()], 
@@ -65,14 +75,14 @@ def new_advert(
     return{"message": "Sucessful"}
 
 # allows vendors to view all adverts.
-@app.get("/adverts")
+@app.get("/adverts", tags=["Advert"])
 def all_adverts(Title= "", limit = 10, skip = 0):
     advert = advert_collection.find(limit = int(limit), skip = int(skip)).to_list()
     return {"data": list(map(replace_mongo_id, advert))}
 
 
 # allows vendors to view a specific advert’s details
-@app.get("/advert_details/{Title}")
+@app.get("/advert_details/{Title}", tags=["Advert"])
 def advert_details(Title:str):
     ads = advert_collection.find_one({"title":Title})
     if not ads:
@@ -81,7 +91,7 @@ def advert_details(Title:str):
 
     
 # allows vendors to edit an advert
-@app.put("/edit_advert/{title}")
+@app.put("/edit_advert/{title}", tags=["Advert"])
 def advert_edit(
     Title: Annotated[str, Form()], 
     Description: Annotated[str, Form()], 
@@ -97,10 +107,10 @@ def advert_edit(
         "price": Price,
         "Flyer": uploald_advert["secure_url"]
     })
-    return{"message": "You have successfully updated your Add✅"}
+    return{"message": "You have successfully updated your Ad✅"}
 
 # allows vendors to remove an advert
-@app.delete("/adverts/{title}")
+@app.delete("/adverts/{title}", tags=["Advert"])
 def delete_advert(Title: str):
     adverts = advert_collection.find_one({"title":Title})
     if not adverts:
