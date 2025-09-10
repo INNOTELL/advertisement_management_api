@@ -47,7 +47,7 @@ def new_advert(
         "price": Price,
         "flyer": upload_advert["secure_url"]
     })
-    return{"message": "Your advert has been posted sucessfully!"}
+    return{"message": "Sucessful"}
 
 # allows vendors to view all adverts.
 @app.get("/adverts")
@@ -92,7 +92,7 @@ def advert_edit(
 
 # allows vendors to remove an advert
 @app.delete("/adverts/{title}")
-def delete_advert(Title):
+def delete_advert(Title: str):
     adverts = advert_collection.find_one({"title":Title})
     if not adverts:
         raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
