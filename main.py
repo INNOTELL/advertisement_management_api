@@ -48,7 +48,7 @@ def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
 # allows vendors to create a new advert.
-@app.post("/advert", )
+@app.post("/advert", tags=["Advert"])
 def new_advert(
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
@@ -106,14 +106,15 @@ def advert_edit(
         raise HTTPException(status_code=404, detail="Sorry advert not found😞")
     uploald_advert = cloudinary.uploader.upload(image.file)
 
-    advert_collection.replace_one({"title": title}, 
-    {
-        "Title": new_title,
-        "Description": description,
+    advert_collection.update_one({"title": title}, 
+    { "$set": {
+        "title": new_title,
+        "description": description,
         "price": price,
         "category": category,
         "image": uploald_advert["secure_url"]
-    })
+    }}
+    )
     return{"message": "You have successfully updated your Advert✅"}
 
 # allows vendors to remove an advert
