@@ -101,8 +101,8 @@ def advert_edit(
     category: Annotated[str, Form()],
     image:Annotated[UploadFile, File()]):
 
-    adverts = advert_collection.find_one({"title":title})
-    if not adverts:
+    ad = advert_collection.find_one({"title":title})
+    if not ad:
         raise HTTPException(status_code=404, detail="Sorry advert not found😞")
     uploald_advert = cloudinary.uploader.upload(image.file)
 
@@ -119,9 +119,9 @@ def advert_edit(
 # allows vendors to remove an advert
 @app.delete("/adverts/{title}")
 def delete_advert(title: str):
-    adverts = advert_collection.find_one({"title":title})
+    advert = advert_collection.find_one({"title":title})
 
-    if not adverts:
+    if not advert:
         raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
     advert_collection.delete_one({"title":title})
     return{"message": "Advert successfully deleted!"}
