@@ -79,7 +79,7 @@ def all_adverts(title= "", description="", limit: int = 10, skip: int = 0):
 #     return{"all_adverts":{advert_collection}}
 
 # allows vendors to view a specific advert’s details
-@app.get("/advert_details/{title}")
+@app.get("/advert_details/{title}", tags=["Advert"])
 def advert_details(title:str):
     adverts = advert_collection.find_one({"title":title})
     if not adverts:
@@ -117,11 +117,11 @@ def advert_edit(
     return{"message": "You have successfully updated your Advert✅"}
 
 # allows vendors to remove an advert
-@app.delete("/adverts/{title}")
+@app.delete("/adverts/{title}", tags=["Advert"])
 def delete_advert(title: str):
-    advert = advert_collection.find_one({"title":title})
+    advert = advert_collection.find_one({"title": title})
 
     if not advert:
         raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
-    advert_collection.delete_one({"title":title})
+    advert_collection.delete_one({"title": title})
     return{"message": "Advert successfully deleted!"}
