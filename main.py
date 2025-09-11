@@ -48,7 +48,7 @@ def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
 # allows vendors to create a new advert.
-@app.post("/advert")
+@app.post("/advert", )
 def new_advert(
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
