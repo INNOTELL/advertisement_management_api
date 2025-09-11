@@ -6,13 +6,39 @@ from typing import Annotated
 from utils import replace_mongo_id
 import cloudinary
 import cloudinary.uploader
+from dotenv import load_dotenv
+import os
 
+
+load_dotenv()
+
+tags_metadata = [
+    {
+        "name": "Home",
+        "description": "welcome to our our Advertisement Management API"
+    },
+    {
+        "name": "Advert",
+        "description": "ads"
+    }
+
+]
 
 cloudinary.config(
-    cloud_name = "dyhqmkyfc",
-    api_key = "617624249245792",
-    api_secret = "cAhgM5MehvpHZu6wgW23h63n9WM"
+    cloud_name = os.getenv("CLOUD_NAME"),
+    api_key = os.getenv("API_KEY"),
+    api_secret = os.getenv("API_SECRET")
 )
+
+tags_metadata = [
+    {
+        "name": "Home",
+        "description": "welcome to our our Advertisement Management API"
+    },
+    {
+        "name": "Advert",
+        "description": "ads"
+    }]
 
 
 app = FastAPI()
@@ -22,32 +48,38 @@ class NewAdvert(BaseModel):
     description: str
     price: float
     flyer: str
+      
+# creates a list to store posted ads
 
 # creates an endpoint to the homepage
-@app.get("/")
+@app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
 # allows vendors to create a new advert.
-@app.post("/advert")
+@app.post("/advert", tags=["Advert"])
 def new_advert(
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
     price: Annotated[float, Form()],
-    flyer:Annotated[UploadFile, File()]):
+    category: Annotated[str, Form()],
+    image:Annotated[UploadFile, File()]):
 
     # upload flyer to cloudinary to get a url
-    upload_advert = cloudinary.uploader.upload(flyer.file)
+    upload_advert = cloudinary.uploader.upload(image.file)
     advert_collection.insert_one({
         "title": title,
         "description": description,
         "price": price,
-        "flyer": upload_advert["secure_url"]
+        "category": category,
+        "image": upload_advert["secure_url"]
+
     })
     return{"message": "Advert Sucessfully created"}
 
 # allows vendors to view all adverts.
-@app.get("/adverts")
+
+@app.get("/adverts", tags=["Advert"])
 def all_adverts(title= "", description="", limit: int = 10, skip: int = 0):
     advert = advert_collection.find().skip(skip).limit(limit)
     return {"data": list(map(replace_mongo_id, advert))}
@@ -58,27 +90,31 @@ def advert_details(title:str):
     adverts = advert_collection.find_one({"title":title})
     if not adverts:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
-    return {"data": [replace_mongo_id(adverts)]}
+    return {"data": [replace_mongo_id(ads)]}
+
 
 # allows vendors to edit an advert
-@app.put("/edit_advert/{title}")
+@app.put("/edit_advert/{title}", tags=["Advert"])
 def advert_edit(
     title: str,
     new_title: Annotated[str, Form()],
     description: Annotated[str, Form()], 
     price: Annotated[float, Form()],
-    flyer:Annotated[UploadFile, File()]):
+    category: Annotated[str, Form()],
+    image:Annotated[UploadFile, File()]):
+  
     adverts = advert_collection.find_one({"title":title})
     if not adverts:
         raise HTTPException(status_code=404, detail="Sorry advert not found😞")
-    
     uploald_advert = cloudinary.uploader.upload(flyer.file)
+
     advert_collection.replace_one({"title": title}, 
     {
         "Title": new_title,
         "Description": description,
         "price": price,
-        "Flyer": uploald_advert["secure_url"]
+        "category": category,
+        "image": uploald_advert["secure_url"]
     })
     return{"message": "You have successfully updated your Advert✅"}
 
@@ -86,6 +122,7 @@ def advert_edit(
 @app.delete("/adverts/{title}")
 def delete_advert(title: str):
     adverts = advert_collection.find_one({"title":title})
+
     if not adverts:
         raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
     advert_collection.delete_one({"title":title})
