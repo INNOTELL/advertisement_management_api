@@ -1,13 +1,13 @@
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile, status
 from pydantic import BaseModel
 from db import advert_collection
-from bson.objectid import ObjectId
+# from bson.objectid import ObjectId
 from typing import Annotated
 from utils import replace_mongo_id
 import cloudinary
 import cloudinary.uploader
 from dotenv import load_dotenv
-import os
+
 
 
 load_dotenv()
@@ -37,8 +37,9 @@ class NewAdvert(BaseModel):
     title: str
     description: str
     price: float
-    flyer: str
-      
+    category: str
+    image: str
+
 # creates a list to store posted ads
 
 # creates an endpoint to the homepage
@@ -83,7 +84,7 @@ def advert_details(title:str):
     adverts = advert_collection.find_one({"title":title})
     if not adverts:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
-    return {"data": [replace_mongo_id(ads)]}
+    return {"data": [replace_mongo_id(adverts)]}
 
     # for adverts in advert_collection:
     #     if adverts["Title"] == Title:
@@ -99,11 +100,11 @@ def advert_edit(
     price: Annotated[float, Form()],
     category: Annotated[str, Form()],
     image:Annotated[UploadFile, File()]):
-  
+
     adverts = advert_collection.find_one({"title":title})
     if not adverts:
         raise HTTPException(status_code=404, detail="Sorry advert not found😞")
-    uploald_advert = cloudinary.uploader.upload(flyer.file)
+    uploald_advert = cloudinary.uploader.upload(image.file)
 
     advert_collection.replace_one({"title": title}, 
     {
