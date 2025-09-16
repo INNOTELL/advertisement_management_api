@@ -17,7 +17,7 @@ tags_metadata = [
         "description": "welcome to our our Advertisement Management API"
     },
     {
-        "name": "Advert",
+        "name": "Manage Advert",
         "description": "ads"
     },
     {
@@ -80,7 +80,7 @@ def login(
 
    
 # allows vendors to create a new advert.
-@app.post("/advert", tags=["Advert"])
+@app.post("/advert", tags=["Manage Advert"])
 def new_advert(
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
@@ -100,14 +100,49 @@ def new_advert(
     })
     return{"message": "Advert Sucessfully created✅"}
 
+# generate a preview of ad before publishing
+@app.post("/ads_preview")
+def preview_advert():
+    return{"message":preview_advert}
+
+# Show ads with the most engagements
+@app.get("/trending")
+def trending_adverts():
+    return{"message":{trending_adverts}}
+
+#  Show ads near a user’s location
+@app.get("/adverts_nearby")
+def ads_nearby():
+    return{"message":{ads_nearby}}
+
+#  View all ads posted by a specific advertiser
+@app.get("/advertisers/{id}")
+def advertiser_profile():
+    return{"message":advertiser_profile}
+
+# Report an inappropriate or scam ad
+@app.post("/adverts/{id}/report")
+def report():
+    return{"message":"We will look into this and give a feedback"}
+
+#  Suggest ads based on the user’s history, interests, or location
+@app.get("/ads/recommendations")
+def recommendation():
+    return{"message":"Based on your recent search,{ads}"}
+
+#  Find ads by category, location, or keyword
+@app.get("/ads/search")
+def Search_Filtering():
+    return{"message":"[]"}
+
 # allows vendors to view all adverts
-@app.get("/adverts", tags=["Advert"])
+@app.get("/adverts", tags=["Manage Advert"])
 def all_adverts(title= "", description="", limit: int = 10, skip: int = 0):
     advert = advert_collection.find().skip(skip).limit(limit)
     return {"data": list(map(replace_mongo_id, advert))}
 
 # allows vendors to view a specific advert’s details
-@app.get("/advert_details/{id}", tags=["Advert"])
+@app.get("/advert_details/{id}", tags=["Manage Advert"])
 def advert_details(id):
     adverts = advert_collection.find_one({"_id":id})
     if not adverts:
@@ -115,7 +150,7 @@ def advert_details(id):
     return {"data":replace_mongo_id(adverts)}
     
 # allows vendors to edit an advert
-@app.put("/edit_advert/{title}", tags=["Advert"])
+@app.put("/edit_advert/{title}", tags=["Manage Advert"])
 def advert_edit(
     title: str,
     new_title: Annotated[str, Form()],
@@ -141,7 +176,7 @@ def advert_edit(
     return{"message": "You have successfully updated your Advert✅"}
 
 # allows vendors to remove an advert
-@app.delete("/adverts/{title}", tags=["Advert"])
+@app.delete("/adverts/{title}", tags=["Manage Advert"])
 def delete_advert(title: str):
     advert = advert_collection.find_one({"title": title})
     if not advert:
