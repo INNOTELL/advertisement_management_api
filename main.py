@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile, status
 from pydantic import BaseModel, EmailStr
 from db import advert_collection
+from db import users_collection
 from typing import Annotated
 from utils import replace_mongo_id
 import cloudinary
@@ -52,19 +53,31 @@ def signup(
     username: Annotated[str,Form()],
     email: Annotated[EmailStr,Form],
     password: Annotated[str, Form(min_length=10)]):
-
-    # Ensure user does not exist
+ # Ensure user does not exist
     user_count = advert_collection.count_documents(filter={"email":email})
     if user_count > 0:
       raise HTTPException(status.HTTP_409_CONFLICT,"User already exist!")
 # Hash user password   
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 # save users into database
-    advert_collection.insert_one({
+    users_collection.insert_one({
     "username": username,
     "email": email,
     "password":hashed_password})
     return{"message":"You've been registered sucessfully!"}
+
+@app.post("/Login", tags=["Sign Up/Login Page"])
+def login(
+    email: Annotated[EmailStr,Form],
+    password: Annotated[str, Form]):
+    user = users_collection.find_one({"email":email})
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND,"Wrong email/password!!!")
+    stored_hash = user["password"].encode("utf-8")   
+    if not bcrypt.checkpw(password.encode("utf-8"), stored_hash):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Wrong email or password!!!")
+    return {"message": f"Welcome back, {user['username']}!"}
+
    
 # allows vendors to create a new advert.
 @app.post("/advert", tags=["Advert"])
@@ -99,7 +112,7 @@ def advert_details(id):
     adverts = advert_collection.find_one({"_id":id})
     if not adverts:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
-    return {"data": [replace_mongo_id(adverts)]}
+    return {"data":replace_mongo_id(adverts)}
     
 # allows vendors to edit an advert
 @app.put("/edit_advert/{title}", tags=["Advert"])
