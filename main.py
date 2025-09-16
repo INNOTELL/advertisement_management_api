@@ -1,14 +1,12 @@
 from fastapi import FastAPI, HTTPException, Form, File, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from db import advert_collection
-# from bson.objectid import ObjectId
 from typing import Annotated
 from utils import replace_mongo_id
 import cloudinary
 import cloudinary.uploader
+import bcrypt
 from dotenv import load_dotenv
-
-
 
 load_dotenv()
 
@@ -20,6 +18,10 @@ tags_metadata = [
     {
         "name": "Advert",
         "description": "ads"
+    },
+    {
+        "name":"Sign Up/Login Page",
+        "description":"Sign Up or Login to join a community of vendors"
     }
 
 ]
@@ -30,8 +32,7 @@ cloudinary.config(
     api_secret = "cAhgM5MehvpHZu6wgW23h63n9WM"
 )
 
-
-app = FastAPI()
+app = FastAPI(title="Inno_Hub", description="Welcome to Inno Hub🛒,Buy and Sell all your products from the comfort of your home🌏", version="1.0")
 
 class NewAdvert(BaseModel):
     title: str
@@ -40,13 +41,31 @@ class NewAdvert(BaseModel):
     category: str
     image: str
 
-# creates a list to store posted ads
-
 # creates an endpoint to the homepage
 @app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
 
+# register a new user
+@app.post("/Sign up", tags=["Sign Up/Login Page"])
+def signup(
+    username: Annotated[str,Form()],
+    email: Annotated[EmailStr,Form],
+    password: Annotated[str, Form(min_length=10)]):
+
+    # Ensure user does not exist
+    user_count = advert_collection.count_documents(filter={"email":email})
+    if user_count > 0:
+      raise HTTPException(status.HTTP_409_CONFLICT,"User already exist!")
+# Hash user password   
+    hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+# save users into database
+    advert_collection.insert_one({
+    "username": username,
+    "email": email,
+    "password":hashed_password})
+    return{"message":"You've been registered sucessfully!"}
+   
 # allows vendors to create a new advert.
 @app.post("/advert", tags=["Advert"])
 def new_advert(
@@ -66,30 +85,21 @@ def new_advert(
         "image": upload_advert["secure_url"]
 
     })
-    return{"message": "Advert Sucessfully created"}
+    return{"message": "Advert Sucessfully created✅"}
 
-# allows vendors to view all adverts.
-
+# allows vendors to view all adverts
 @app.get("/adverts", tags=["Advert"])
 def all_adverts(title= "", description="", limit: int = 10, skip: int = 0):
     advert = advert_collection.find().skip(skip).limit(limit)
     return {"data": list(map(replace_mongo_id, advert))}
 
-# def all_adverts():
-#     return{"all_adverts":{advert_collection}}
-
 # allows vendors to view a specific advert’s details
-@app.get("/advert_details/{title}", tags=["Advert"])
-def advert_details(title:str):
-    adverts = advert_collection.find_one({"title":title})
+@app.get("/advert_details/{id}", tags=["Advert"])
+def advert_details(id):
+    adverts = advert_collection.find_one({"_id":id})
     if not adverts:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
     return {"data": [replace_mongo_id(adverts)]}
-
-    # for adverts in advert_collection:
-    #     if adverts["Title"] == Title:
-    #         return ads
-    #     raise HTTPException(status_code=404, detail="Advert not found")
     
 # allows vendors to edit an advert
 @app.put("/edit_advert/{title}", tags=["Advert"])
@@ -121,7 +131,6 @@ def advert_edit(
 @app.delete("/adverts/{title}", tags=["Advert"])
 def delete_advert(title: str):
     advert = advert_collection.find_one({"title": title})
-
     if not advert:
         raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
     advert_collection.delete_one({"title": title})
