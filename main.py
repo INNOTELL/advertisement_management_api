@@ -1,5 +1,9 @@
+from datetime import datetime, timedelta, timezone
+import os
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException,Query,Form, File, UploadFile, status
+from fastapi import FastAPI, HTTPException,Query,Form, File, UploadFile, status,Depends
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+import jwt
 from pydantic import BaseModel, EmailStr
 from db import advert_collection
 from db import users_collection
@@ -13,6 +17,11 @@ import bcrypt
 from dotenv import load_dotenv
 
 load_dotenv()
+SECRET_KEY = os.getenv("JWT_SECRET_KEY","secret_key")
+ALGORITHM = "HS256"
+
+oauth2_scheme = HTTPBearer()
+
 
 tags_metadata = [
     {
@@ -90,6 +99,25 @@ class RoleEnum(str, Enum):
 @app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
+# Extract current user from token
+def get_current_user(token: HTTPAuthorizationCredentials = Depends(oauth2_scheme)):
+    try:
+        payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        role: str = payload.get("role")
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return {"_id": user_id, "role": role}
+    except jwt.PyJWTError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 # register a new user
 @app.post("/SignUp", tags=["Sign Up/Login Page"])
@@ -119,41 +147,56 @@ def signup(
 
 @app.post("/Login", tags=["Sign Up/Login Page"])
 def login(
-    email: Annotated[EmailStr,Form],
-    password: Annotated[str, Form]):
-    user = users_collection.find_one({"email":email})
+    email: Annotated[EmailStr, Form],
+    password: Annotated[str, Form]
+):
+    user = users_collection.find_one({"email": email})
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND,"Wrong email/password!!!")
-    stored_hash = user["password"].encode("utf-8")   
-    if not bcrypt.checkpw(password.encode("utf-8"), stored_hash):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Wrong email or password!!!")
-    return {"message": f"Welcome back, {user['username']}!"}
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User does not exist")
 
+    # Compare their password
+    stored_password = user["password"].encode("utf-8")
+    if not bcrypt.checkpw(password.encode("utf-8"), stored_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+
+    # Generate access token
+    payload = {
+        "sub": str(user["_id"]),
+        "role": user["role"],
+        "exp": datetime.now(tz=timezone.utc) + timedelta(minutes=362)
+    }
+    encoded_jwt = jwt.encode(payload,SECRET_KEY, algorithm=ALGORITHM)
+
+    return {
+        "message": f"Welcome back, {user['username']}!",
+        "access_token": encoded_jwt
+    }
    
 # allows vendors to create a new advert.
 @app.post("/advert", tags=["Manage Advert"])
 def new_advert(
-    advertiser_id: Annotated[str,Form()],
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
     price: Annotated[float, Form()],
     category: CategoryEnum,
     location: LocationEnum,
-    image:Annotated[UploadFile, File()]):
+    image: Annotated[UploadFile, File()],
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "Vendor":
+        raise HTTPException(status_code=403, detail="Only vendors can create adverts")
 
-    # upload flyer to cloudinary to get a url
     upload_advert = cloudinary.uploader.upload(image.file)
     advert_collection.insert_one({
-        "advertiser_id":advertiser_id,
+        "owner_id": current_user["_id"],  # vendor id
         "title": title,
         "description": description,
         "price": price,
         "category": category.value,
         "location": location.value,
         "image": upload_advert["secure_url"]
-
     })
-    return{"message": "Advert Sucessfully created✅"}
+    return {"message": "Advert successfully created ✅"}
 
 # generate a preview of ad before publishing
 @app.post("/ads_preview")
@@ -249,42 +292,48 @@ def advert_details(id:str):
 @app.put("/edit_advert/{id}", tags=["Manage Advert"])
 def advert_edit(
     id: str,
-    title: str,
     new_title: Annotated[str, Form()],
     description: Annotated[str, Form()], 
     price: Annotated[float, Form()],
     category: Annotated[str, Form()],
     location: LocationEnum,
-    image:Annotated[UploadFile, File()]):
+    image: Annotated[UploadFile, File()],
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user["role"] != "Vendor":
+        raise HTTPException(status_code=403, detail="Only vendors can edit adverts")
 
-    ad = advert_collection.find_one({"_id":ObjectId(id)})
+    ad = advert_collection.find_one({"_id": ObjectId(id)})
     if not ad:
-        raise HTTPException(status_code=404, detail="Sorry advert not found😞")
-    uploald_advert = cloudinary.uploader.upload(image.file)
+        raise HTTPException(status_code=404, detail="Advert not found")
 
-    advert_collection.update_one({"_id":ObjectId(id)}, 
-    { "$set": {
-        "title": new_title,
-        "description": description,
-        "price": price,
-        "category": category,
-        "location": location.value,
-        "image": uploald_advert["secure_url"]
-    }}
+    if ad["owner_id"] != current_user["_id"]:
+        raise HTTPException(status_code=403, detail="You can only edit your own adverts")
+
+    upload_advert = cloudinary.uploader.upload(image.file)
+    advert_collection.update_one({"_id": ObjectId(id)}, 
+        { "$set": {
+            "title": new_title,
+            "description": description,
+            "price": price,
+            "category": category,
+            "location": location.value,
+            "image": upload_advert["secure_url"]
+        }}
     )
-    return{"message": "You have successfully updated your Advert✅"}
-
+    return {"message": "You have successfully updated your Advert ✅"}
 # allows vendors to remove an advert
 @app.delete("/adverts/{id}", tags=["Manage Advert"])
-def delete_advert(id: str):
-    try:
-        advert_obj_id = ObjectId(id)
-    except InvalidId:
-        raise HTTPException(status_code=400, detail="Invalid advert ID")
+def delete_advert(id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "Vendor":
+        raise HTTPException(status_code=403, detail="Only vendors can delete adverts")
 
-    advert = advert_collection.find_one({"_id":ObjectId(id)})
+    advert = advert_collection.find_one({"_id": ObjectId(id)})
     if not advert:
-        raise HTTPException(status_code=404, detail="Sorry advert not found to be deleted😞")
-    advert_collection.delete_one({"_id":ObjectId(id)})
-    return{"message": "Advert successfully deleted!"}
-  
+        raise HTTPException(status_code=404, detail="Advert not found")
+
+    if advert["owner_id"] != current_user["_id"]:
+        raise HTTPException(status_code=403, detail="You can only delete your own adverts")
+
+    advert_collection.delete_one({"_id": ObjectId(id)})
+    return {"message": "Advert successfully deleted ✅"}
