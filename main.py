@@ -35,8 +35,11 @@ tags_metadata = [
     {
         "name":"Sign Up/Login Page",
         "description":"Sign Up or Login to join a community of vendors"
+    },
+    {
+        "name": "🛒Vendor Dashboard"
     }
-
+   
 ]
 
 cloudinary.config(
@@ -92,7 +95,7 @@ class Report(BaseModel):
 
 class RoleEnum(str, Enum):
     vendor = "Vendor"
-    buyer = "Buyer"
+    user = "User"
 
 
 # creates an endpoint to the homepage
@@ -125,7 +128,7 @@ def signup(
     username: Annotated[str, Form(min_length=6, max_length=12)],
     email: Annotated[EmailStr, Form],
     password: Annotated[str, Form(min_length=8)],
-    role: RoleEnum = RoleEnum.buyer 
+    role: RoleEnum = RoleEnum.user 
  
 ):
     if users_collection.find_one({"email": email}):
@@ -173,7 +176,7 @@ def login(
     }
    
 # allows vendors to create a new advert.
-@app.post("/advert", tags=["Manage Advert"])
+@app.post("/advert", tags=["🛒Vendor Dashboard"])
 def new_advert(
     title: Annotated[str, Form()], 
     description: Annotated[str, Form()], 
@@ -199,7 +202,7 @@ def new_advert(
     return {"message": "Advert successfully created ✅"}
 
 # generate a preview of ad before publishing
-@app.post("/ads_preview")
+@app.post("/ads_preview", tags=["🛒Vendor Dashboard"])
 def preview_advert(ad: AdPreview):
 #  return the ad back to the user
  return {
@@ -212,84 +215,9 @@ def preview_advert(ad: AdPreview):
             "location": ad.location
         }
     }
-#  Show ads near a user’s location
-@app.get("/adverts_nearby/{user_location}")
-def get_ads_by_location(user_location: LocationEnum):
-    ads = list(advert_collection.find(
-        {"location": {"$regex": user_location.value, "$options": "i"}}
-    ))
-    return {"ads": list(map(replace_mongo_id, ads))}
 
-
-#  View all ads posted by a specific advertiser
-@app.get("/advertisers/{id}")
-def advertiser_profile(id: str):
-    ads = list(advert_collection.find({"advertiser_id": id}))
-    if not ads:
-        raise HTTPException(status_code=404, detail="No ads found for this advertiser")
-    return {"ads": list(map(replace_mongo_id, ads))}
-
-# Report an inappropriate or scam ad
-@app.post("/adverts/{id}/report")
-def report(id: str, report: Report):
-    result = advert_collection.update_one(
-        {"_id": ObjectId(id)},
-        {"$push": {"reports": {"reason": report.reason}}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Ad not found")
-    return {
-        "message": f"Ad {id} reported successfully. We will review it.",
-        "reason": report.reason
-    }
-
-#  Suggest ads based on the user’s history, interests, or location
-@app.get("/recommendations/{ads}")
-def recommendation(ads: str):
-    recs = list(advert_collection.find(
-        {"category": {"$regex": ads, "$options": "i"}}
-    ).limit(5))
-    return {"recommended": list(map(replace_mongo_id, recs))}
-
-#  Find ads by category, location, or keyword
-@app.get("/ads/search")
-def search_filtering(
-    category: Optional[str] = None,
-    location: Optional[str] = None,
-    keyword: Optional[str] = None
-):
-    query = {}
-
-    if category:
-        query["category"] = {"$regex": category, "$options": "i"}
-    if location:
-        query["location"] = {"$regex": location, "$options": "i"}
-    if keyword:
-        query["title"] = {"$regex": keyword, "$options": "i"}
-
-    ads = list(advert_collection.find(query))
-    return {"ads": list(map(replace_mongo_id, ads))}
-
-# allows vendors to view all adverts
-@app.get("/adverts", tags=["Manage Advert"])
-def all_adverts(limit: int = 10, skip: int = 0):
-    adverts = advert_collection.find().skip(skip).limit(limit)
-    return {"data": list(map(replace_mongo_id, adverts))}
-
-# allows vendors to view a specific advert’s details
-@app.get("/advert_details/{id}", tags=["Manage Advert"])
-def advert_details(id:str):
-    try:
-        adverts = advert_collection.find_one({"_id": ObjectId(id)})
-    except:
-        raise HTTPException(status_code=400, detail="Invalid advert ID format")
-    adverts = advert_collection.find_one({"_id": ObjectId(id)})
-    if not adverts:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
-    return {"data":replace_mongo_id(adverts)}
-    
 # allows vendors to edit an advert
-@app.put("/edit_advert/{id}", tags=["Manage Advert"])
+@app.put("/edit_advert/{id}", tags=["🛒Vendor Dashboard"])
 def advert_edit(
     id: str,
     new_title: Annotated[str, Form()],
@@ -322,8 +250,9 @@ def advert_edit(
         }}
     )
     return {"message": "You have successfully updated your Advert ✅"}
+
 # allows vendors to remove an advert
-@app.delete("/adverts/{id}", tags=["Manage Advert"])
+@app.delete("/adverts/{id}", tags=["🛒Vendor Dashboard"])
 def delete_advert(id: str, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "Vendor":
         raise HTTPException(status_code=403, detail="Only vendors can delete adverts")
@@ -337,3 +266,98 @@ def delete_advert(id: str, current_user: dict = Depends(get_current_user)):
 
     advert_collection.delete_one({"_id": ObjectId(id)})
     return {"message": "Advert successfully deleted ✅"}
+
+#  Show ads near a user’s location
+@app.get("/adverts_nearby/{user_location}", tags=["Manage Advert"])
+def get_ads_by_location(user_location: LocationEnum):
+    ads = list(advert_collection.find(
+        {"location": {"$regex": user_location.value, "$options": "i"}}
+    ))
+    return {"ads": list(map(replace_mongo_id, ads))}
+
+
+#  View all ads posted by a specific advertiser
+@app.get("/advertisers/{id}", tags=["Manage Advert"])
+def advertiser_profile(id: str):
+    ads = list(advert_collection.find({"advertiser_id": id}))
+    if not ads:
+        raise HTTPException(status_code=404, detail="No ads found for this advertiser")
+    return {"ads": list(map(replace_mongo_id, ads))}
+
+#  Suggest ads based on the user’s history, interests, or location
+@app.get("/recommendations/{ads}", tags=["Manage Advert"])
+def recommendation(ads: str):
+    recs = list(advert_collection.find(
+        {"category": {"$regex": ads, "$options": "i"}}
+    ).limit(5))
+    return {"recommended": list(map(replace_mongo_id, recs))}
+
+#  Find ads by category, location, or keyword
+@app.get("/ads/search", tags=["Manage Advert"])
+def search_filtering(
+    category: Optional[str] = None,
+    location: Optional[str] = None,
+    keyword: Optional[str] = None,
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None
+):
+    query = {}
+
+    if category:
+        query["category"] = {"$regex": category, "$options": "i"}
+    if location:
+        query["location"] = {"$regex": location, "$options": "i"}
+    if keyword:
+        query["title"] = {"$regex": keyword, "$options": "i"}
+    if min_price is not None and max_price is not None:
+        query["price"] = {"$gte": min_price, "$lte": max_price}
+    elif min_price is not None:
+        query["price"] = {"$gte": min_price}
+    elif max_price is not None:
+        query["price"] = {"$lte": max_price}
+
+    ads = list(advert_collection.find(query))
+    return {"ads": list(map(replace_mongo_id, ads))}
+
+# allows vendors to view all adverts
+@app.get("/adverts", tags=["Manage Advert"])
+def all_adverts(limit: int = 10, skip: int = 0):
+    adverts = advert_collection.find().skip(skip).limit(limit)
+    return {"data": list(map(replace_mongo_id, adverts))}
+
+# allows vendors to view a specific advert’s details
+@app.get("/advert_details/{id}", tags=["Manage Advert"])
+def advert_details(id: str):
+    try:
+        advert = advert_collection.find_one({"_id": ObjectId(id)})
+    except:
+        raise HTTPException(status_code=400, detail="Invalid advert ID format")
+    
+    if not advert:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
+
+    # Get related adverts from the same category (excluding this advert)
+    related_ads = list(advert_collection.find({
+        "category": advert["category"],
+        "_id": {"$ne": advert["_id"]}
+    }).limit(5))
+
+    return {
+        "data": replace_mongo_id(advert),
+        "related": list(map(replace_mongo_id, related_ads))
+    }
+
+# Report an inappropriate or scam ad
+@app.post("/adverts/{id}/report", tags=["Report An Advert❌"])
+def report(id: str, report: Report):
+    result = advert_collection.update_one(
+        {"_id": ObjectId(id)},
+        {"$push": {"reports": {"reason": report.reason}}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Ad not found")
+    return {
+        "message": f"Ad {id} reported successfully. We will review it.",
+        "reason": report.reason
+    }
+
