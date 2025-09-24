@@ -1,16 +1,17 @@
 from datetime import datetime, timedelta, timezone
 import os
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException,Query,Form, File, UploadFile, status,Depends
+from fastapi import FastAPI, HTTPException,Form, File, UploadFile, status,Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from pydantic import BaseModel, EmailStr
 from db import advert_collection
 from db import users_collection
-from bson.errors import InvalidId
 from typing import Annotated, Optional
 from enum import Enum
-from utils import replace_mongo_id
+import db
+from utils import replace_mongo_id, genai_client
+from google.genai import types
 import cloudinary
 import cloudinary.uploader
 import bcrypt
@@ -38,6 +39,9 @@ tags_metadata = [
     },
     {
         "name": "🛒Vendor Dashboard"
+    },
+    {
+        "name": "📸AI Image Generation"
     }
    
 ]
@@ -97,6 +101,21 @@ class RoleEnum(str, Enum):
     vendor = "Vendor"
     user = "User"
 
+class CartItem(BaseModel):
+    user_id: str
+    advert_id: str
+    quantity: int = 1
+
+class WishlistItem(BaseModel):
+    user_id: str
+    advert_id: str
+
+class ImageGenerationRequest(BaseModel):
+    prompt: str
+    num_images: int = 1
+
+class ImageGenerationResponse(BaseModel):
+    image_urls: list[str]
 
 # creates an endpoint to the homepage
 @app.get("/", tags=["Home"])
@@ -183,13 +202,39 @@ def new_advert(
     price: Annotated[float, Form()],
     category: CategoryEnum,
     location: LocationEnum,
-    image: Annotated[UploadFile, File()],
+    image: Optional[UploadFile] = File(None),  # make optional
     current_user: dict = Depends(get_current_user)
 ):
     if current_user["role"] != "Vendor":
         raise HTTPException(status_code=403, detail="Only vendors can create adverts")
 
-    upload_advert = cloudinary.uploader.upload(image.file)
+    try:
+        if image:
+            # Vendor uploaded an image
+            upload_advert = cloudinary.uploader.upload(image.file)
+            image_url = upload_advert["secure_url"]
+        else:
+            # No image uploaded → Generate AI image
+            response = genai_client.models.generate_images(
+                model="imagen-4.0-generate-001",
+                prompt=title,
+                config=types.GenerateImagesConfig(number_of_images=1),
+            )
+            # Extract image bytes
+            img_bytes = response.generated_images[0].image_bytes
+
+            # Save temporarily
+            temp_file = f"/tmp/{ObjectId()}.png"
+            with open(temp_file, "wb") as f:
+                f.write(img_bytes)
+
+            # Upload to Cloudinary
+            upload_advert = cloudinary.uploader.upload(temp_file)
+            image_url = upload_advert["secure_url"]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Image handling failed: {str(e)}")
+
+    # Insert advert
     advert_collection.insert_one({
         "owner_id": current_user["_id"],  # vendor id
         "title": title,
@@ -197,9 +242,11 @@ def new_advert(
         "price": price,
         "category": category.value,
         "location": location.value,
-        "image": upload_advert["secure_url"]
+        "image": image_url
     })
-    return {"message": "Advert successfully created ✅"}
+
+    return {"message": "Advert successfully created ✅", "image_url": image_url}
+
 
 # generate a preview of ad before publishing
 @app.post("/ads_preview", tags=["🛒Vendor Dashboard"])
@@ -284,6 +331,36 @@ def advertiser_profile(id: str):
         raise HTTPException(status_code=404, detail="No ads found for this advertiser")
     return {"ads": list(map(replace_mongo_id, ads))}
 
+# Allow users to add to cart
+@app.post("/cart/add")
+def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_current_user)):
+    cart_item = {
+        "user_id": str(user["_id"]),
+        "advert_id": advert_id,
+        "quantity": quantity
+    }
+    db.cart.update_one(
+        {"user_id": cart_item["user_id"], "advert_id": advert_id},
+        {"$inc": {"quantity": quantity}},
+        upsert=True
+    )
+    return {"message": "Item added to cart"}
+
+# Allow users to item add to wishlist
+@app.post("/wishlist/add")
+def add_to_wishlist(advert_id: str, user: dict = Depends(get_current_user)):
+    wishlist_item = {
+        "user_id": str(user["_id"]),
+        "advert_id": advert_id
+    }
+    db.wishlist.update_one(
+        wishlist_item,
+        {"$set": wishlist_item},
+        upsert=True
+    )
+    return {"message": "Item added to wishlist"}
+
+
 #  Suggest ads based on the user’s history, interests, or location
 @app.get("/recommendations/{ads}", tags=["Manage Advert"])
 def recommendation(ads: str):
@@ -357,7 +434,8 @@ def report(id: str, report: Report):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Ad not found")
     return {
-        "message": f"Ad {id} reported successfully. We will review it.",
+        "message": f"Ad {id} reported successfully. We will review it and give a feedback",
         "reason": report.reason
     }
+
 
