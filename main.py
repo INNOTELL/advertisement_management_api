@@ -185,7 +185,7 @@ def login(
     payload = {
         "sub": str(user["_id"]),
         "role": user["role"],
-        "exp": datetime.now(tz=timezone.utc) + timedelta(minutes=362)
+        "exp": datetime.now(tz=timezone.utc) + timedelta(days=7)
     }
     encoded_jwt = jwt.encode(payload,SECRET_KEY, algorithm=ALGORITHM)
 
@@ -332,7 +332,7 @@ def advertiser_profile(id: str):
     return {"ads": list(map(replace_mongo_id, ads))}
 
 # Allow users to add to cart
-@app.post("/cart/add")
+@app.post("/cart/add",tags=["Users"])
 def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_current_user)):
     cart_item = {
         "user_id": str(user["_id"]),
@@ -347,7 +347,7 @@ def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_curr
     return {"message": "Item added to cart"}
 
 # Allow users to item add to wishlist
-@app.post("/wishlist/add")
+@app.post("/wishlist/add" ,tags=["Users"])
 def add_to_wishlist(advert_id: str, user: dict = Depends(get_current_user)):
     wishlist_item = {
         "user_id": str(user["_id"]),
