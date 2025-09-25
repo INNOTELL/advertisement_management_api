@@ -1,19 +1,23 @@
 from datetime import datetime, timedelta, timezone
+from bson.errors import InvalidId
 import os
 from bson import ObjectId
-from fastapi import FastAPI, HTTPException,Form, File, UploadFile, status,Depends
+from fastapi import FastAPI, HTTPException,Form, File, UploadFile, status,Depends, Body
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from pydantic import BaseModel, EmailStr
 from db import advert_collection, users_collection, cart_collection, wishlist_collection
 from typing import Annotated, Optional
 from enum import Enum
-import db
 from utils import replace_mongo_id, genai_client
 from google.genai import types
 import cloudinary
 import cloudinary.uploader
 import bcrypt
+import tempfile
+import base64
+
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -75,23 +79,6 @@ class LocationEnum(str, Enum):
     volta = "Volta Region"
     western = "Western Region"
 
-class NewAdvert(BaseModel):
-    title: str 
-    description: str
-    price: float
-    category: CategoryEnum
-    image: str
-    location: LocationEnum
-
-
-class AdPreview(BaseModel):
-    title: str
-    description: str
-    price: float
-    category: CategoryEnum
-    image: str
-    location: LocationEnum
-
 class Report(BaseModel):
     reason: str
 
@@ -119,6 +106,7 @@ class ImageGenerationResponse(BaseModel):
 @app.get("/", tags=["Home"])
 def root():
     return{"Message":"Welcome to our Advertisement Management API"}
+
 # Extract current user from token
 def get_current_user(token: HTTPAuthorizationCredentials = Depends(oauth2_scheme)):
     try:
@@ -131,25 +119,37 @@ def get_current_user(token: HTTPAuthorizationCredentials = Depends(oauth2_scheme
                 detail="Invalid authentication credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        return {"_id": user_id, "role": role}
+        # Fetch full user from DB so we have username, role, etc.
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return {
+            "_id": str(user["_id"]),
+            "role": user.get("role"),
+            "username": user.get("username"),
+            "email": user.get("email")
+        }
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication failed: {str(e)}")
+
 
 # register a new user
 @app.post("/SignUp", tags=["Sign Up/Login Page"])
 def signup(
-    username: Annotated[str, Form(min_length=6, max_length=12)],
+    username: Annotated[str, Form(min_length=6, max_length=20)],
     email: Annotated[EmailStr, Form],
     password: Annotated[str, Form(min_length=8)],
     role: RoleEnum = RoleEnum.user 
  
 ):
     if users_collection.find_one({"email": email}):
-        raise HTTPException(status.HTTP_409_CONFLICT, "User already exists!")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists!")
 
     hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
     result = users_collection.insert_one({
@@ -172,12 +172,12 @@ def login(
 ):
     user = users_collection.find_one({"email": email})
     if not user:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "User does not exist")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User does not exist")
 
     # Compare their password
     stored_password = user["password"].encode("utf-8")
     if not bcrypt.checkpw(password.encode("utf-8"), stored_password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     # Generate access token
     payload = {
@@ -195,8 +195,8 @@ def login(
 # allows vendors to create a new advert.
 @app.post("/advert", tags=["🛒Vendor Dashboard"])
 def new_advert(
-    title: Annotated[str, Form()], 
-    description: Annotated[str, Form()], 
+    title: Annotated[str, Form()],
+    description: Annotated[str, Form()],
     price: Annotated[float, Form()],
     category: CategoryEnum,
     location: LocationEnum,
@@ -206,44 +206,95 @@ def new_advert(
     if current_user["role"] != "Vendor":
         raise HTTPException(status_code=403, detail="Only vendors can create adverts")
 
+    image_url = None
+
     try:
+        # 1) If vendor uploaded an image file -> upload to Cloudinary
         if image:
-            # Vendor uploaded an image
-            upload_advert = cloudinary.uploader.upload(image.file)
-            image_url = upload_advert["secure_url"]
+            # rewind just in case
+            image.file.seek(0)
+            # Cloudinary can accept a file-like or bytes; pass bytes to be safe
+            file_bytes = image.file.read()
+            # write to temp file so Cloudinary can detect extension if needed
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(image.filename or ".png")[1]) as tf:
+                tf.write(file_bytes)
+                temp_path = tf.name
+
+            upload_advert = cloudinary.uploader.upload(temp_path)
+            os.remove(temp_path)
+            image_url = upload_advert.get("secure_url")
+
         else:
-            # No image uploaded → Generate AI image
+    
+            model_name = "imagen-4.0-generate-001"
+
             response = genai_client.models.generate_images(
-                model="imagen-4.0-generate-001",
+                model=model_name,
                 prompt=title,
                 config=types.GenerateImagesConfig(number_of_images=1),
             )
-            # Extract image bytes
-            img_bytes = response.generated_images[0].image_bytes
 
-            # Save temporarily
-            temp_file = f"/tmp/{ObjectId()}.png"
-            with open(temp_file, "wb") as f:
-                f.write(img_bytes)
+            # Try multiple possible field shapes: bytes or base64 string
+            gen_img = response.generated_images[0]
 
-            # Upload to Cloudinary
-            upload_advert = cloudinary.uploader.upload(temp_file)
-            image_url = upload_advert["secure_url"]
+            img_bytes = None
+
+            # 1) direct bytes attribute
+            if hasattr(gen_img, "image_bytes") and gen_img.image_bytes:
+                img_bytes = gen_img.image_bytes
+            # 2) maybe it's a base64 string attribute
+            elif hasattr(gen_img, "image_base64") and gen_img.image_base64:
+                img_bytes = base64.b64decode(gen_img.image_base64)
+            elif hasattr(gen_img, "b64") and gen_img.b64:
+                img_bytes = base64.b64decode(gen_img.b64)
+            # 3) sometimes it's gen_img.image which itself has bytes or b64
+            elif hasattr(gen_img, "image"):
+                inner = gen_img.image
+                if isinstance(inner, (bytes, bytearray)):
+                    img_bytes = bytes(inner)
+                elif hasattr(inner, "b64") and inner.b64:
+                    img_bytes = base64.b64decode(inner.b64)
+                elif hasattr(inner, "image_bytes") and inner.image_bytes:
+                    img_bytes = inner.image_bytes
+                elif isinstance(inner, str):
+                    # treat as base64 string
+                    try:
+                        img_bytes = base64.b64decode(inner)
+                    except Exception:
+                        img_bytes = None
+
+            if img_bytes is None:
+                raise RuntimeError("Could not extract image bytes from the GenAI response. Inspect response structure.")
+
+            # Save to a reliable temp file
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tf:
+                tf.write(img_bytes)
+                temp_path = tf.name
+
+            upload_advert = cloudinary.uploader.upload(temp_path)
+            os.remove(temp_path)
+            
+
     except Exception as e:
+        # Bubble up helpful info so you can debug
         raise HTTPException(status_code=500, detail=f"Image handling failed: {str(e)}")
 
-    # Insert advert
-    advert_collection.insert_one({
-        "owner_id": current_user["_id"],  # vendor id
+    # Insert advert with owner_id and published_by
+    advert_doc = {
+        "published_by": current_user.get("username"),
+        "owner_id": current_user.get("_id"),
         "title": title,
         "description": description,
         "price": price,
         "category": category.value,
         "location": location.value,
-        "image": image_url
-    })
+        "image": image_url,
+        "created_at": datetime.utcnow()
+    }
 
-    return {"message": "Advert successfully created ✅", "image_url": image_url}
+    advert_collection.insert_one(advert_doc)
+
+    return {"message": "Advert successfully created ✅", "image_url": image_url, "published_by": current_user.get("username")}
 
 # allows vendors to edit an advert
 @app.put("/edit_advert/{id}", tags=["🛒Vendor Dashboard"])
@@ -252,50 +303,95 @@ def advert_edit(
     new_title: Annotated[str, Form()],
     description: Annotated[str, Form()],
     price: Annotated[float, Form()],
-    category: CategoryEnum = Form(...),
-    location: LocationEnum = Form(...),
+    category: CategoryEnum,
+    location: LocationEnum,
     image: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
-    if current_user["role"] != "Vendor":
+    # Check if user is a vendor
+    if current_user.get("role") != "Vendor":
         raise HTTPException(status_code=403, detail="Only vendors can edit adverts")
 
-    ad = advert_collection.find_one({"_id": ObjectId(id)})
+    # Validate ObjectId
+    try:
+        obj_id = ObjectId(id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid advert ID")
+
+    # Check if advert exists
+    ad = advert_collection.find_one({"_id": obj_id})
     if not ad:
         raise HTTPException(status_code=404, detail="Advert not found")
 
-    if ad["owner_id"] != current_user["_id"]:
+    # Check ownership (convert both sides to str for safety)
+    if str(ad.get("owner_id")) != str(current_user.get("_id")):
         raise HTTPException(status_code=403, detail="You can only edit your own adverts")
 
+    # Prepare update data
     update_data = {
         "title": new_title,
         "description": description,
         "price": price,
-        "category": category.value,
+        "category": category.value,  
         "location": location.value,
+        "updated_at": datetime.utcnow()
     }
 
+    # Handle image upload safely
     if image:
-        upload_advert = cloudinary.uploader.upload(image.file)
-        update_data["image"] = upload_advert["secure_url"]
+        try:
+            file_bytes = image.file.read()
+            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(image.filename or ".png")[1]) as tf:
+             tf.write(file_bytes)
+             temp_path = tf.name
 
-    advert_collection.update_one({"_id": ObjectId(id)}, {"$set": update_data})
+             
+            upload_advert = cloudinary.uploader.upload(temp_path, resource_type="image")
+            os.remove(temp_path)
+            update_data["image"] = upload_advert.get("secure_url")
+
+
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
+
+    # Update advert in DB
+    result = advert_collection.update_one(
+        {"_id": obj_id},
+        {"$set": update_data}
+    )
+
+    if result.modified_count == 0:
+        raise HTTPException(status_code=304, detail="No changes were made to the advert")
+
     return {"message": "You have successfully updated your Advert ✅"}
 
 # allows vendors to remove an advert
 @app.delete("/adverts/{id}", tags=["🛒Vendor Dashboard"])
 def delete_advert(id: str, current_user: dict = Depends(get_current_user)):
-    if current_user["role"] != "Vendor":
+    # Check if user is a vendor
+    if current_user.get("role") != "Vendor":
         raise HTTPException(status_code=403, detail="Only vendors can delete adverts")
 
-    advert = advert_collection.find_one({"_id": ObjectId(id)})
+    # Validate ObjectId
+    try:
+        obj_id = ObjectId(id)
+    except InvalidId:
+        raise HTTPException(status_code=400, detail="Invalid advert ID")
+
+    # Find advert
+    advert = advert_collection.find_one({"_id": obj_id})
     if not advert:
         raise HTTPException(status_code=404, detail="Advert not found")
 
-    if advert["owner_id"] != current_user["_id"]:
+    # Check ownership (convert both sides to str to avoid mismatch)
+    if str(advert.get("owner_id")) != str(current_user.get("_id")):
         raise HTTPException(status_code=403, detail="You can only delete your own adverts")
 
-    advert_collection.delete_one({"_id": ObjectId(id)})
+    # Perform delete
+    result = advert_collection.delete_one({"_id": obj_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=500, detail="Failed to delete advert")
+
     return {"message": "Advert successfully deleted ✅"}
 
 #  Show ads near a user’s location
@@ -316,7 +412,7 @@ def advertiser_profile(id: str):
     return {"ads": list(map(replace_mongo_id, ads))}
 
 # Allow users to add to cart
-@app.post("/cart/add", tags=["Users"])
+@app.post("/cart/add", tags=["🛒 Cart"])
 def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_current_user)):
     cart_item = {
         "user_id": str(user["_id"]),
@@ -331,7 +427,7 @@ def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_curr
     return {"message": "Item added to cart"}
 
 # Allow users to item add to wishlist
-@app.post("/wishlist/add", tags=["Users"])
+@app.post("/wishlist/add", tags=["⭐ Wishlist"])
 def add_to_wishlist(advert_id: str, user: dict = Depends(get_current_user)):
     wishlist_item = {
         "user_id": str(user["_id"]),
@@ -346,10 +442,10 @@ def add_to_wishlist(advert_id: str, user: dict = Depends(get_current_user)):
 
 
 #  Suggest ads based on the user’s history, interests, or location
-@app.get("/recommendations/{ads}", tags=["Manage Advert"])
-def recommendation(ads: str):
+@app.get("/recommendations/", tags=["Manage Advert"])
+def recommendation(category: str):
     recs = list(advert_collection.find(
-        {"category": {"$regex": ads, "$options": "i"}}
+        {"category": {"$regex": category, "$options": "i"}}
     ).limit(5))
     return {"recommended": list(map(replace_mongo_id, recs))}
 
@@ -409,7 +505,7 @@ def advert_details(id: str):
 
 # Report an inappropriate or scam ad
 @app.post("/adverts/{id}/report", tags=["Report An Advert❌"])
-def report(id: str, report: Report):
+def report(id: str, report: Report = Body(...)):
     result = advert_collection.update_one(
         {"_id": ObjectId(id)},
         {"$push": {"reports": {"reason": report.reason}}}
