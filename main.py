@@ -5,8 +5,7 @@ from fastapi import FastAPI, HTTPException,Form, File, UploadFile, status,Depend
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import jwt
 from pydantic import BaseModel, EmailStr
-from db import advert_collection
-from db import users_collection
+from db import advert_collection, users_collection, cart_collection, wishlist_collection
 from typing import Annotated, Optional
 from enum import Enum
 import db
@@ -202,7 +201,7 @@ def new_advert(
     price: Annotated[float, Form()],
     category: CategoryEnum,
     location: LocationEnum,
-    image: Optional[UploadFile] = File(None),  # make optional
+    image: Optional[bytes] = File(None),  # make optional
     current_user: dict = Depends(get_current_user)
 ):
     if current_user["role"] != "Vendor":
