@@ -46,11 +46,10 @@ tags_metadata = [
 ]
 
 cloudinary.config(
-    cloud_name = "dyhqmkyfc",
-    api_key = "617624249245792",
-    api_secret = "cAhgM5MehvpHZu6wgW23h63n9WM"
+    cloud_name=os.getenv("CLOUDINARY_CLOUD_NAME"),
+    api_key=os.getenv("CLOUDINARY_API_KEY"),
+    api_secret=os.getenv("CLOUDINARY_API_SECRET"),
 )
-
 app = FastAPI(title="Inno_Hub", description="Welcome to Inno Hub🛒,Buy and Sell all your products from the comfort of your home🌏", version="1.0")
 
 class CategoryEnum(str, Enum):
@@ -126,14 +125,14 @@ def get_current_user(token: HTTPAuthorizationCredentials = Depends(oauth2_scheme
         payload = jwt.decode(token.credentials, SECRET_KEY, algorithms=[ALGORITHM])
         user_id: str = payload.get("sub")
         role: str = payload.get("role")
-        if user_id is None:
+        if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
         return {"_id": user_id, "role": role}
-    except jwt.PyJWTError:
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired token",
@@ -201,7 +200,7 @@ def new_advert(
     price: Annotated[float, Form()],
     category: CategoryEnum,
     location: LocationEnum,
-    image: Optional[bytes] = File(None),  # make optional
+    image: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
     if current_user["role"] != "Vendor":
@@ -246,32 +245,16 @@ def new_advert(
 
     return {"message": "Advert successfully created ✅", "image_url": image_url}
 
-
-# generate a preview of ad before publishing
-@app.post("/ads_preview", tags=["🛒Vendor Dashboard"])
-def preview_advert(ad: AdPreview):
-#  return the ad back to the user
- return {
-            "preview": {
-            "title": ad.title,
-            "description": ad.description,
-            "price": ad.price,
-            "category": ad.category,
-            "image": ad.image,
-            "location": ad.location
-        }
-    }
-
 # allows vendors to edit an advert
 @app.put("/edit_advert/{id}", tags=["🛒Vendor Dashboard"])
 def advert_edit(
     id: str,
     new_title: Annotated[str, Form()],
-    description: Annotated[str, Form()], 
+    description: Annotated[str, Form()],
     price: Annotated[float, Form()],
-    category: Annotated[str, Form()],
-    location: LocationEnum,
-    image: Annotated[UploadFile, File()],
+    category: CategoryEnum = Form(...),
+    location: LocationEnum = Form(...),
+    image: UploadFile = File(None),
     current_user: dict = Depends(get_current_user)
 ):
     if current_user["role"] != "Vendor":
@@ -284,17 +267,19 @@ def advert_edit(
     if ad["owner_id"] != current_user["_id"]:
         raise HTTPException(status_code=403, detail="You can only edit your own adverts")
 
-    upload_advert = cloudinary.uploader.upload(image.file)
-    advert_collection.update_one({"_id": ObjectId(id)}, 
-        { "$set": {
-            "title": new_title,
-            "description": description,
-            "price": price,
-            "category": category,
-            "location": location.value,
-            "image": upload_advert["secure_url"]
-        }}
-    )
+    update_data = {
+        "title": new_title,
+        "description": description,
+        "price": price,
+        "category": category.value,
+        "location": location.value,
+    }
+
+    if image:
+        upload_advert = cloudinary.uploader.upload(image.file)
+        update_data["image"] = upload_advert["secure_url"]
+
+    advert_collection.update_one({"_id": ObjectId(id)}, {"$set": update_data})
     return {"message": "You have successfully updated your Advert ✅"}
 
 # allows vendors to remove an advert
@@ -325,20 +310,20 @@ def get_ads_by_location(user_location: LocationEnum):
 #  View all ads posted by a specific advertiser
 @app.get("/advertisers/{id}", tags=["Manage Advert"])
 def advertiser_profile(id: str):
-    ads = list(advert_collection.find({"advertiser_id": id}))
+    ads = list(advert_collection.find({"owner_id": id}))
     if not ads:
         raise HTTPException(status_code=404, detail="No ads found for this advertiser")
     return {"ads": list(map(replace_mongo_id, ads))}
 
 # Allow users to add to cart
-@app.post("/cart/add",tags=["Users"])
+@app.post("/cart/add", tags=["Users"])
 def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_current_user)):
     cart_item = {
         "user_id": str(user["_id"]),
         "advert_id": advert_id,
         "quantity": quantity
     }
-    db.cart.update_one(
+    cart_collection.update_one(
         {"user_id": cart_item["user_id"], "advert_id": advert_id},
         {"$inc": {"quantity": quantity}},
         upsert=True
@@ -346,13 +331,13 @@ def add_to_cart(advert_id: str, quantity: int = 1, user: dict = Depends(get_curr
     return {"message": "Item added to cart"}
 
 # Allow users to item add to wishlist
-@app.post("/wishlist/add" ,tags=["Users"])
+@app.post("/wishlist/add", tags=["Users"])
 def add_to_wishlist(advert_id: str, user: dict = Depends(get_current_user)):
     wishlist_item = {
         "user_id": str(user["_id"]),
         "advert_id": advert_id
     }
-    db.wishlist.update_one(
+    wishlist_collection.update_one(
         wishlist_item,
         {"$set": wishlist_item},
         upsert=True
@@ -408,11 +393,10 @@ def advert_details(id: str):
         advert = advert_collection.find_one({"_id": ObjectId(id)})
     except:
         raise HTTPException(status_code=400, detail="Invalid advert ID format")
-    
-    if not advert:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Sorry advert not found😞")
 
-    # Get related adverts from the same category (excluding this advert)
+    if not advert:
+        raise HTTPException(status_code=404, detail="Sorry advert not found 😞")
+
     related_ads = list(advert_collection.find({
         "category": advert["category"],
         "_id": {"$ne": advert["_id"]}
